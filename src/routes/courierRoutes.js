@@ -1,80 +1,98 @@
 const express = require('express');
 const router = express.Router();
-const mysql = require('mysql2/promise');
+const Courier = require('../models/Courier');
 
-// Configuración de base de datos (ajusta si es diferente)
-const dbConfig = {
-  host: 'localhost',
-  user: 'root',
-  password: 'Siccosa$742',
-  database: 'itobox_courier',
-  charset: 'utf8mb4'
-};
-
-// GET /api/couriers - Obtener todos los couriers
+// Obtener todos los couriers
 router.get('/', async (req, res) => {
   try {
-    console.log('📍 Obteniendo lista de couriers...');
-    
-    const connection = await mysql.createConnection(dbConfig);
-    const [couriers] = await connection.execute(`
-      SELECT id, name, email, phone, address, city, vehicle_type, 
-             license_plate, active, available, rating, created_at
-      FROM couriers 
-      WHERE active = 1
-      ORDER BY created_at DESC
-    `);
-    await connection.end();
-
-    console.log(`✅ ${couriers.length} couriers encontrados`);
-    
-    res.json({
-      success: true,
-      data: couriers,
-      total: couriers.length
-    });
+    const couriers = await Courier.findAll();
+    res.json(couriers);
   } catch (error) {
-    console.error('❌ Error obteniendo couriers:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error interno del servidor'
-    });
+    console.error('Error al obtener couriers:', error);
+    res.status(500).json({ error: 'Error al obtener couriers' });
   }
 });
 
-// GET /api/couriers/stats - Estadísticas de couriers
-router.get('/stats', async (req, res) => {
+// Obtener courier por ID
+router.get('/:id', async (req, res) => {
   try {
-    console.log('📊 Obteniendo estadísticas de couriers...');
-    
-    const connection = await mysql.createConnection(dbConfig);
-    
-    const [totalResult] = await connection.execute('SELECT COUNT(*) as total FROM couriers');
-    const [activeResult] = await connection.execute('SELECT COUNT(*) as active FROM couriers WHERE active = 1');
-    const [availableResult] = await connection.execute('SELECT COUNT(*) as available FROM couriers WHERE available = 1 AND active = 1');
-
-    await connection.end();
-
-    const stats = {
-      total: totalResult[0].total,
-      active: activeResult[0].active,
-      available: availableResult[0].available,
-      busy: activeResult[0].active - availableResult[0].available,
-      inactive: totalResult[0].total - activeResult[0].active
-    };
-
-    console.log('✅ Estadísticas obtenidas:', stats);
-    
-    res.json({
-      success: true,
-      data: stats
-    });
+    const courier = await Courier.findById(parseInt(req.params.id));
+    if (!courier) {
+      return res.status(404).json({ error: 'Courier no encontrado' });
+    }
+    res.json(courier);
   } catch (error) {
-    console.error('❌ Error obteniendo estadísticas:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error interno del servidor'
-    });
+    console.error('Error al obtener courier:', error);
+    res.status(500).json({ error: 'Error al obtener courier' });
+  }
+});
+
+// Crear nuevo courier
+router.post('/', async (req, res) => {
+  try {
+    const newCourier = await Courier.create(req.body);
+    res.status(201).json(newCourier);
+  } catch (error) {
+    console.error('Error al crear courier:', error);
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Actualizar courier
+router.put('/:id', async (req, res) => {
+  try {
+    const updated = await Courier.update(parseInt(req.params.id), req.body);
+    if (!updated) {
+      return res.status(404).json({ error: 'Courier no encontrado' });
+    }
+    res.json(updated);
+  } catch (error) {
+    console.error('Error al actualizar courier:', error);
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Eliminar courier
+router.delete('/:id', async (req, res) => {
+  try {
+    const deleted = await Courier.delete(parseInt(req.params.id));
+    if (!deleted) {
+      return res.status(404).json({ error: 'Courier no encontrado' });
+    }
+    res.json({ message: 'Courier eliminado exitosamente' });
+  } catch (error) {
+    console.error('Error al eliminar courier:', error);
+    res.status(500).json({ error: 'Error al eliminar courier' });
+  }
+});
+
+// Obtener couriers disponibles
+router.get('/available/list', async (req, res) => {
+  try {
+    const couriers = await Courier.findAll();
+    const available = couriers.filter(c => c.available);
+    res.json(available);
+  } catch (error) {
+    console.error('Error al obtener couriers disponibles:', error);
+    res.status(500).json({ error: 'Error al obtener couriers disponibles' });
+  }
+});
+
+// Actualizar estado de disponibilidad
+router.patch('/:id/availability', async (req, res) => {
+  try {
+    const { available } = req.body;
+    const courier = await Courier.findById(parseInt(req.params.id));
+    
+    if (!courier) {
+      return res.status(404).json({ error: 'Courier no encontrado' });
+    }
+
+    const updated = await Courier.update(parseInt(req.params.id), { available });
+    res.json(updated);
+  } catch (error) {
+    console.error('Error al actualizar disponibilidad:', error);
+    res.status(500).json({ error: 'Error al actualizar disponibilidad' });
   }
 });
 
