@@ -1,0 +1,95 @@
+Listado de rutas de carpetas
+El número de serie del volumen es F627-5757
+C:.
+|   .env
+|   database_schema.sql
+|   output.txt
+|   package-lock.json
+|   package.json
+|   README.md
+|   
++---controllers
+|       authController.js
+|       
++---docs
++---logs
++---middleware
+|       authMiddleware.js
+|       
++---migrations
++---models
+|       index.js
+|       User.js
+|       
++---node_modules
+|           
++---scripts
+|       database-setup.sql
+|       post-install.js
+|       seed.js
+|       setup.js
+|       
++---seeders
+|       20240101000001-demo-users.js
+|       20240101000002-demo-clients.js
+|       20240101000003-demo-packages.js
+|       
++---seeds
++---src
+|   |   app - copia.js
+|   |   app.js
+|   |   server - copia.js
+|   |   server.js
+|   |   
+|   +---config
+|   |       database.js
+|   |       
+|   +---controllers
+|   |       authController.js
+|   |       billingController.js
+|   |       clientController.js
+|   |       courierController.js
+|   |       dashboardController.js
+|   |       notificationController.js
+|   |       packageController.js
+|   |       trackingController.js
+|   |       warehouseController.js
+|   |       
+|   +---middleware
+|   |       auth.js
+|   |       authMiddleware.js
+|   |       authorize.js
+|   |       errorMiddleware.js
+|   |       
+|   +---models
+|   |       Client.js
+|   |       Courier.js
+|   |       index.js
+|   |       Package.js
+|   |       User.js
+|   |       whr.js
+|   |       
+|   \---routes
+|           auth.js
+|           authRoutes.js
+|           billingRoutes.js
+|           clientPortalRoutes.js
+|           clientRoutes.js
+|           courierRoutes.js
+|           dashboardRoutes.js
+|           index.js
+|           notificationRoutes.js
+|           packagesRoutes.js
+|           trackingRoutes.js
+|           warehouseRoutes.js
+|           
++---test
+|   +---fixtures
+|   +---integration
+|   \---unit
+\---uploads
+    +---clients
+    +---documents
+    +---invoices
+    +---packages
+    \---signatures

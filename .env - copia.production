@@ -1,0 +1,18 @@
+# Base de datos
+DATABASE_URL=mysql://user:pass@host:port/db_name
+DB_SSL=true
+
+# JWT
+JWT_SECRET=itobox-super-secreto-jwt-key-2025-production-256bits
+JWT_EXPIRES_IN=15m
+
+# Email
+SMTP_HOST=smtp.gmail.com
+SMTP_USER=notifications@itobox.com
+SMTP_PASS=app-password-aqui
+
+# System
+NODE_ENV=production
+PORT=5000
+FRONTEND_URL=https://sci.vercel.app
+BACKEND_URL=https://api.itobox.com

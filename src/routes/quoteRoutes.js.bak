@@ -1,0 +1,507 @@
+// backend/src/routes/quoteRoutes.js - Compatible con tu sistema actual
+const express = require('express');
+const router = express.Router();
+const { pool } = require('../config/database');
+
+// Middleware simple de autenticacion (adaptar al tuyo)
+const authMiddleware = (req, res, next) => {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  if (!token) {
+    return res.status(401).json({
+      success: false,
+      message: 'Token requerido'
+    });
+  }
+  
+  // Aqui deberias validar el JWT - por ahora simulamos usuario
+  req.user = {
+    id: 1,
+    role: 'admin',
+    name: 'Usuario Demo',
+    email: 'demo@itobox.com'
+  };
+  next();
+};
+
+// Funcion para calcular cotizacion
+function calculateQuote(data) {
+  const {
+    weight,
+    distance = 50,
+    declaredValue = 0,
+    serviceType = 'standard',
+    urgency = 'normal',
+    pickupType = 'office'
+  } = data;
+
+  const baseCost = 1500;
+  const weightCost = parseFloat(weight) * 250;
+  const distanceCost = distance * 20;
+  
+  const serviceMultipliers = {
+    standard: 1.0,
+    express: 1.5,
+    overnight: 2.0,
+    same_day: 2.5
+  };
+  
+  const urgencyMultipliers = {
+    normal: 1.0,
+    urgent: 1.25,
+    emergency: 1.5
+  };
+  
+  const pickupCosts = {
+    office: 0,
+    home: 500,
+    remote: 1500
+  };
+
+  const serviceCost = baseCost * (serviceMultipliers[serviceType] - 1);
+  const urgencyCost = baseCost * (urgencyMultipliers[urgency] - 1);
+  const pickupCost = pickupCosts[pickupType];
+  const insuranceCost = declaredValue * 0.02;
+
+  const subtotal = baseCost + weightCost + distanceCost + serviceCost + urgencyCost + pickupCost + insuranceCost;
+  const taxAmount = subtotal * 0.13;
+  const total = subtotal + taxAmount;
+
+  return {
+    baseCost,
+    weightCost: Math.round(weightCost * 100) / 100,
+    distanceCost: Math.round(distanceCost * 100) / 100,
+    serviceCost: Math.round(serviceCost * 100) / 100,
+    urgencyCost: Math.round(urgencyCost * 100) / 100,
+    pickupCost,
+    insuranceCost: Math.round(insuranceCost * 100) / 100,
+    subtotal: Math.round(subtotal * 100) / 100,
+    taxAmount: Math.round(taxAmount * 100) / 100,
+    total: Math.round(total * 100) / 100
+  };
+}
+
+// Generar numero de cotizacion
+function generateQuoteNumber() {
+  const year = new Date().getFullYear();
+  const timestamp = Date.now().toString().slice(-6);
+  return `QT-${year}-${timestamp}`;
+}
+
+// ============= RUTAS =============
+
+// POST /api/quotes - Crear cotizacion
+router.post('/', authMiddleware, async (req, res) => {
+  try {
+    const {
+      origin,
+      destination,
+      weight,
+      dimensions = '',
+      declaredValue = 0,
+      serviceType = 'standard',
+      urgency = 'normal',
+      pickupType = 'office',
+      clientName,
+      clientEmail,
+      notes = ''
+    } = req.body;
+
+    // Validaciones basicas
+    if (!origin || !destination || !weight) {
+      return res.status(400).json({
+        success: false,
+        message: 'Origen, destino y peso son requeridos'
+      });
+    }
+
+    if (weight <= 0 || weight > 1000) {
+      return res.status(400).json({
+        success: false,
+        message: 'El peso debe estar entre 0.1 y 1000 kg'
+      });
+    }
+
+    // Calcular costos
+    const distance = 50; // Simulado
+    const calculation = calculateQuote({
+      weight,
+      distance,
+      declaredValue,
+      serviceType,
+      urgency,
+      pickupType
+    });
+
+    const quoteNumber = generateQuoteNumber();
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + 7);
+
+    // Insertar en base de datos
+    const insertQuery = `
+      INSERT INTO quotes (
+        quote_number, user_id, user_role, client_name, client_email,
+        origin, destination, weight, dimensions, declared_value,
+        service_type, urgency, pickup_type, distance_km,
+        base_cost, weight_cost, distance_cost, service_cost,
+        urgency_cost, pickup_cost, insurance_cost,
+        subtotal, tax_amount, total_amount,
+        status, expires_at, notes
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `;
+
+    const values = [
+      quoteNumber,
+      req.user.id,
+      req.user.role,
+      clientName || req.user.name,
+      clientEmail || req.user.email,
+      origin,
+      destination,
+      weight,
+      dimensions,
+      declaredValue,
+      serviceType,
+      urgency,
+      pickupType,
+      distance,
+      calculation.baseCost,
+      calculation.weightCost,
+      calculation.distanceCost,
+      calculation.serviceCost,
+      calculation.urgencyCost,
+      calculation.pickupCost,
+      calculation.insuranceCost,
+      calculation.subtotal,
+      calculation.taxAmount,
+      calculation.total,
+      'pending',
+      expiresAt,
+      notes
+    ];
+
+    const [result] = await pool.execute(insertQuery, values);
+
+    const newQuote = {
+      id: result.insertId,
+      quote_number: quoteNumber,
+      user_id: req.user.id,
+      user_role: req.user.role,
+      client_name: clientName || req.user.name,
+      client_email: clientEmail || req.user.email,
+      origin,
+      destination,
+      weight,
+      dimensions,
+      declared_value: declaredValue,
+      service_type: serviceType,
+      urgency,
+      pickup_type: pickupType,
+      distance_km: distance,
+      ...calculation,
+      status: 'pending',
+      expires_at: expiresAt,
+      notes,
+      created_at: new Date()
+    };
+
+    // Notificar via WebSocket
+    if (global.notifyQuoteUpdate) {
+      global.notifyQuoteUpdate(result.insertId, 'created', newQuote);
+    }
+
+    res.status(201).json({
+      success: true,
+      message: 'Cotizacion creada exitosamente',
+      data: newQuote
+    });
+
+  } catch (error) {
+    console.error('Error creando cotizacion:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error interno del servidor',
+      error: error.message
+    });
+  }
+});
+
+// GET /api/quotes - Obtener cotizaciones
+router.get('/', authMiddleware, async (req, res) => {
+  try {
+    const { page = 1, limit = 10, status, search } = req.query;
+    const offset = (page - 1) * limit;
+
+    let whereClause = 'WHERE 1=1';
+    let params = [];
+
+    // Filtrar por rol
+    if (req.user.role === 'client') {
+      whereClause += ' AND user_id = ?';
+      params.push(req.user.id);
+    } else if (req.user.role === 'agent') {
+      whereClause += ' AND (user_id = ? OR agent_id = ?)';
+      params.push(req.user.id, req.user.id);
+    }
+
+    // Filtro por estado
+    if (status) {
+      whereClause += ' AND status = ?';
+      params.push(status);
+    }
+
+    // Filtro de busqueda
+    if (search) {
+      whereClause += ' AND (quote_number LIKE ? OR origin LIKE ? OR destination LIKE ? OR client_name LIKE ?)';
+      const searchPattern = `%${search}%`;
+      params.push(searchPattern, searchPattern, searchPattern, searchPattern);
+    }
+
+    const countQuery = `SELECT COUNT(*) as total FROM quotes ${whereClause}`;
+    const dataQuery = `
+      SELECT * FROM quotes 
+      ${whereClause}
+      ORDER BY created_at DESC 
+      LIMIT ? OFFSET ?
+    `;
+
+    const [countResult] = await pool.execute(countQuery, params);
+    const [quotes] = await pool.execute(dataQuery, [...params, parseInt(limit), parseInt(offset)]);
+
+    res.json({
+      success: true,
+      data: {
+        quotes,
+        pagination: {
+          total: countResult[0].total,
+          page: parseInt(page),
+          pages: Math.ceil(countResult[0].total / limit),
+          limit: parseInt(limit)
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('Error obteniendo cotizaciones:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error interno del servidor'
+    });
+  }
+});
+
+// GET /api/quotes/:id - Obtener cotizacion especifica
+router.get('/:id', authMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const query = 'SELECT * FROM quotes WHERE id = ?';
+    const [quotes] = await pool.execute(query, [id]);
+
+    if (quotes.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Cotizacion no encontrada'
+      });
+    }
+
+    const quote = quotes[0];
+
+    // Verificar permisos
+    if (req.user.role === 'client' && quote.user_id !== req.user.id) {
+      return res.status(403).json({
+        success: false,
+        message: 'No autorizado'
+      });
+    }
+
+    if (req.user.role === 'agent' && quote.user_id !== req.user.id && quote.agent_id !== req.user.id) {
+      return res.status(403).json({
+        success: false,
+        message: 'No autorizado'
+      });
+    }
+
+    res.json({
+      success: true,
+      data: quote
+    });
+
+  } catch (error) {
+    console.error('Error obteniendo cotizacion:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error interno del servidor'
+    });
+  }
+});
+
+// PUT /api/quotes/:id/status - Actualizar estado (solo admin)
+router.put('/:id/status', authMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status, reason = '' } = req.body;
+
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Solo administradores pueden cambiar el estado'
+      });
+    }
+
+    const validStatuses = ['pending', 'approved', 'rejected', 'expired', 'converted'];
+    if (!validStatuses.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Estado invalido'
+      });
+    }
+
+    // Obtener cotizacion actual
+    const [quotes] = await pool.execute('SELECT * FROM quotes WHERE id = ?', [id]);
+    if (quotes.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Cotizacion no encontrada'
+      });
+    }
+
+    const quote = quotes[0];
+    const oldStatus = quote.status;
+
+    // Actualizar estado
+    await pool.execute('UPDATE quotes SET status = ? WHERE id = ?', [status, id]);
+
+    // Registrar en historial si existe la tabla
+    try {
+      await pool.execute(
+        'INSERT INTO quote_status_history (quote_id, old_status, new_status, changed_by, reason) VALUES (?, ?, ?, ?, ?)',
+        [id, oldStatus, status, req.user.id, reason]
+      );
+    } catch (historyError) {
+      console.log('Tabla de historial no disponible:', historyError.message);
+    }
+
+    // Notificar cambio
+    if (global.notifyQuoteUpdate) {
+      global.notifyQuoteUpdate(id, 'status_changed', {
+        ...quote,
+        status,
+        old_status: oldStatus
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Estado actualizado exitosamente',
+      data: { ...quote, status }
+    });
+
+  } catch (error) {
+    console.error('Error actualizando estado:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error interno del servidor'
+    });
+  }
+});
+
+// GET /api/quotes/stats - Estadisticas
+router.get('/stats', authMiddleware, async (req, res) => {
+  try {
+    let whereClause = 'WHERE 1=1';
+    let params = [];
+
+    if (req.user.role === 'client') {
+      whereClause += ' AND user_id = ?';
+      params.push(req.user.id);
+    } else if (req.user.role === 'agent') {
+      whereClause += ' AND (user_id = ? OR agent_id = ?)';
+      params.push(req.user.id, req.user.id);
+    }
+
+    const statsQuery = `
+      SELECT 
+        status,
+        COUNT(*) as count,
+        COALESCE(SUM(total_amount), 0) as total_value
+      FROM quotes 
+      ${whereClause}
+      GROUP BY status
+    `;
+
+    const totalQuery = `SELECT COUNT(*) as total FROM quotes ${whereClause}`;
+
+    const [stats] = await pool.execute(statsQuery, params);
+    const [totalResult] = await pool.execute(totalQuery, params);
+
+    res.json({
+      success: true,
+      data: {
+        byStatus: stats,
+        totalQuotes: totalResult[0].total,
+        recentQuotes: totalResult[0].total // Simplificado
+      }
+    });
+
+  } catch (error) {
+    console.error('Error obteniendo estadisticas:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error interno del servidor'
+    });
+  }
+});
+
+// DELETE /api/quotes/:id - Eliminar cotizacion
+router.delete('/:id', authMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const [quotes] = await pool.execute('SELECT * FROM quotes WHERE id = ?', [id]);
+    if (quotes.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Cotizacion no encontrada'
+      });
+    }
+
+    const quote = quotes[0];
+
+    // Solo admin o propietario pueden eliminar
+    if (req.user.role !== 'admin' && quote.user_id !== req.user.id) {
+      return res.status(403).json({
+        success: false,
+        message: 'No autorizado'
+      });
+    }
+
+    // Solo permitir eliminar ciertas cotizaciones
+    if (!['pending', 'rejected', 'expired'].includes(quote.status)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Solo se pueden eliminar cotizaciones pendientes, rechazadas o expiradas'
+      });
+    }
+
+    await pool.execute('DELETE FROM quotes WHERE id = ?', [id]);
+
+    // Notificar eliminacion
+    if (global.notifyQuoteUpdate) {
+      global.notifyQuoteUpdate(id, 'deleted', quote);
+    }
+
+    res.json({
+      success: true,
+      message: 'Cotizacion eliminada exitosamente'
+    });
+
+  } catch (error) {
+    console.error('Error eliminando cotizacion:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error interno del servidor'
+    });
+  }
+});
+
+module.exports = router;

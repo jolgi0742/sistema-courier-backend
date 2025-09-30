@@ -1,0 +1,219 @@
+﻿const express = require('express');
+const router = express.Router();
+const { pool } = require('../config/database');
+
+const authMiddleware = (req, res, next) => {
+  req.user = {
+    id: 1,
+    role: 'admin',
+    name: 'Usuario Demo',
+    email: 'demo@itobox.com'
+  };
+  next();
+};
+
+function calculateQuote(data) {
+  const weight = parseFloat(data.weight) || 0;
+  const distance = parseFloat(data.distance) || 50;
+  const declaredValue = parseFloat(data.declaredValue) || 0;
+  const serviceType = data.serviceType || 'standard';
+  const urgency = data.urgency || 'normal';
+  const pickupType = data.pickupType || 'office';
+  
+  const baseCost = 1500;
+  const weightCost = weight * 250;
+  const distanceCost = distance * 20;
+  
+  const serviceMultipliers = {
+    standard: 1.0,
+    express: 1.5,
+    overnight: 2.0,
+    same_day: 2.5
+  };
+  
+  const urgencyMultipliers = {
+    normal: 1.0,
+    urgent: 1.25,
+    emergency: 1.5
+  };
+  
+  const pickupCosts = {
+    office: 0,
+    home: 500,
+    remote: 1500
+  };
+  
+  const serviceCost = baseCost * (serviceMultipliers[serviceType] - 1);
+  const urgencyCost = baseCost * (urgencyMultipliers[urgency] - 1);
+  const pickupCost = pickupCosts[pickupType] || 0;
+  const insuranceCost = declaredValue * 0.02;
+  
+  const subtotal = baseCost + weightCost + distanceCost + serviceCost + urgencyCost + pickupCost + insuranceCost;
+  const taxAmount = subtotal * 0.13;
+  const total = subtotal + taxAmount;
+  
+  return {
+    baseCost: Math.round(baseCost * 100) / 100,
+    weightCost: Math.round(weightCost * 100) / 100,
+    distanceCost: Math.round(distanceCost * 100) / 100,
+    serviceCost: Math.round(serviceCost * 100) / 100,
+    urgencyCost: Math.round(urgencyCost * 100) / 100,
+    pickupCost: Math.round(pickupCost * 100) / 100,
+    insuranceCost: Math.round(insuranceCost * 100) / 100,
+    subtotal: Math.round(subtotal * 100) / 100,
+    taxAmount: Math.round(taxAmount * 100) / 100,
+    total: Math.round(total * 100) / 100
+  };
+}
+
+router.get('/', authMiddleware, async (req, res) => {
+  try {
+    if (!pool) {
+      const mockQuotes = [
+        {
+          id: 1,
+          quote_number: 'QT-2025-001',
+          client_name: 'Cliente Demo',
+          origin: 'San José',
+          destination: 'Cartago',
+          weight: 2.5,
+          total_amount: 2977.55,
+          status: 'pending',
+          created_at: new Date().toISOString()
+        }
+      ];
+      
+      return res.json({
+        success: true,
+        data: {
+          quotes: mockQuotes,
+          pagination: { total: 1, page: 1, pages: 1, limit: 10 }
+        }
+      });
+    }
+
+    res.json({
+      success: true,
+      data: { quotes: [], pagination: { total: 0, page: 1, pages: 0, limit: 10 } }
+    });
+
+  } catch (error) {
+    console.error('Error obteniendo cotizaciones:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error interno del servidor'
+    });
+  }
+});
+
+router.post('/', authMiddleware, async (req, res) => {
+  try {
+    const {
+      origin,
+      destination,
+      weight,
+      declaredValue = 0,
+      serviceType = 'standard',
+      urgency = 'normal',
+      pickupType = 'office',
+      clientName,
+      clientEmail
+    } = req.body;
+    
+    if (!origin || !destination || !weight) {
+      return res.status(400).json({
+        success: false,
+        message: 'Origen, destino y peso son campos requeridos'
+      });
+    }
+
+    const weightNum = parseFloat(weight);
+    if (isNaN(weightNum) || weightNum <= 0 || weightNum > 1000) {
+      return res.status(400).json({
+        success: false,
+        message: 'El peso debe estar entre 0.1 y 1000 kg'
+      });
+    }
+
+    const calculation = calculateQuote({
+      weight: weightNum,
+      declaredValue: parseFloat(declaredValue) || 0,
+      serviceType,
+      urgency,
+      pickupType
+    });
+
+    const quoteNumber = 'QT-' + new Date().getFullYear() + '-' + String(Date.now()).slice(-6).padStart(6, '0');
+
+    const mockQuote = {
+      id: Date.now(),
+      quote_number: quoteNumber,
+      client_name: clientName || req.user.name,
+      origin: origin.trim(),
+      destination: destination.trim(),
+      weight: weightNum,
+      total_amount: calculation.total,
+      status: 'pending',
+      created_at: new Date().toISOString()
+    };
+    
+    res.status(201).json({
+      success: true,
+      message: 'Cotización creada exitosamente',
+      data: mockQuote
+    });
+
+  } catch (error) {
+    console.error('Error creando cotización:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error interno del servidor'
+    });
+  }
+});
+
+router.get('/stats', authMiddleware, async (req, res) => {
+  try {
+    res.json({
+      success: true,
+      data: {
+        totalQuotes: 5,
+        pendingQuotes: 3,
+        approvedQuotes: 2,
+        totalValue: 15750.25
+      }
+    });
+  } catch (error) {
+    console.error('Error obteniendo estadísticas:', error);
+    res.status(500).json({ success: false, message: 'Error interno del servidor' });
+  }
+});
+
+router.post('/calculate', (req, res) => {
+  try {
+    const { weight, declaredValue = 0, serviceType = 'standard', urgency = 'normal', pickupType = 'office' } = req.body;
+
+    if (!weight || isNaN(parseFloat(weight))) {
+      return res.status(400).json({
+        success: false,
+        message: 'Peso es requerido y debe ser un número válido'
+      });
+    }
+
+    const calculation = calculateQuote({
+      weight: parseFloat(weight),
+      declaredValue: parseFloat(declaredValue) || 0,
+      serviceType,
+      urgency,
+      pickupType
+    });
+
+    res.json({ success: true, data: calculation });
+
+  } catch (error) {
+    console.error('Error calculando cotización:', error);
+    res.status(500).json({ success: false, message: 'Error interno del servidor' });
+  }
+});
+
+module.exports = router;
