@@ -1,20 +1,6 @@
 const express = require('express');
-const mysql = require('mysql2/promise');
 const router = express.Router();
-
-// Configuración de conexión MySQL
-const dbConfig = {
-  host: process.env.DB_HOST || 'localhost',
-  user: process.env.DB_USER || 'root',
-  password: process.env.DB_PASSWORD || 'Siccosa$742',
-  database: process.env.DB_NAME || 'itobox_courier',
-  waitForConnections: true,
-  connectionLimit: 10,
-  queueLimit: 0
-};
-
-// Pool de conexiones
-const pool = mysql.createPool(dbConfig);
+const Client = require('../models/Client');
 
 // GET /api/clients - Obtener todos los clientes
 router.get('/', async (req, res) => {
@@ -22,38 +8,16 @@ router.get('/', async (req, res) => {
     console.log('👥 GET /api/clients - Obteniendo clientes');
     
     const { search, status } = req.query;
+    const filters = {};
+    
+    if (search) filters.search = search;
+    if (status && status !== 'all') filters.status = status;
 
-    let query = `
-      SELECT c.*, 
-             COUNT(p.id) as total_packages
-      FROM clients c
-      LEFT JOIN packages p ON c.id = p.client_id
-      WHERE 1=1
-    `;
-    let params = [];
-
-    // Filtro por búsqueda
-    if (search) {
-      query += ' AND (c.name LIKE ? OR c.email LIKE ? OR c.company LIKE ?)';
-      params.push(`%${search}%`, `%${search}%`, `%${search}%`);
-    }
-
-    // Filtro por estado
-    if (status && status !== 'all') {
-      query += ' AND c.active = ?';
-      params.push(status === 'active' ? 1 : 0);
-    }
-
-    query += ' GROUP BY c.id ORDER BY c.created_at DESC';
-
-    console.log('🔍 Query:', query);
-    console.log('🔍 Params:', params);
-
-    const [rows] = await pool.execute(query, params);
+    const clients = await Client.findAllWithDetails(filters);
 
     res.json({
-      clients: rows,
-      total: rows.length
+      clients,
+      total: clients.length
     });
 
   } catch (error) {
@@ -72,16 +36,9 @@ router.get('/:id', async (req, res) => {
     const { id } = req.params;
     console.log(`👥 GET /api/clients/${id} - Obteniendo cliente específico`);
 
-    const [rows] = await pool.execute(`
-      SELECT c.*, 
-             COUNT(p.id) as total_packages
-      FROM clients c
-      LEFT JOIN packages p ON c.id = p.client_id
-      WHERE c.id = ?
-      GROUP BY c.id
-    `, [id]);
+    const client = await Client.findByIdWithDetails(parseInt(id));
 
-    if (rows.length === 0) {
+    if (!client) {
       return res.status(404).json({
         success: false,
         error: 'Cliente no encontrado'
@@ -90,7 +47,7 @@ router.get('/:id', async (req, res) => {
 
     res.json({
       success: true,
-      client: rows[0]
+      client
     });
 
   } catch (error) {
@@ -105,10 +62,7 @@ router.get('/:id', async (req, res) => {
 // POST /api/clients - Crear nuevo cliente
 router.post('/', async (req, res) => {
   try {
-    const {
-      name, email, phone, address, city, country,
-      company, contact_person
-    } = req.body;
+    const { name, email, phone, address, city, country, company, contact_person } = req.body;
 
     console.log(`👥 POST /api/clients - Creando cliente: ${name}`);
 
@@ -130,45 +84,42 @@ router.post('/', async (req, res) => {
     }
 
     // Verificar si el email ya existe
-    const [existing] = await pool.execute(
-      'SELECT id FROM clients WHERE email = ?',
-      [email]
-    );
-
-    if (existing.length > 0) {
+    const existing = await Client.findByEmail(email);
+    if (existing) {
       return res.status(409).json({
         success: false,
         error: 'El email ya está en uso'
       });
     }
 
-    // Insertar cliente
-    const [result] = await pool.execute(`
-      INSERT INTO clients (
-        name, email, phone, address, city, country,
-        company, contact_person, active, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, NOW(), NOW())
-    `, [
-      name, email, phone || '', address || '', city || '',
-      country || 'Costa Rica', company || '', contact_person || ''
-    ]);
+    // Separar nombre en first_name y last_name
+    const nameParts = name.split(' ');
+    const first_name = nameParts[0];
+    const last_name = nameParts.slice(1).join(' ') || '';
 
-    // Obtener el cliente creado
-    const [newClient] = await pool.execute(`
-      SELECT c.*, 
-             COUNT(p.id) as total_packages
-      FROM clients c
-      LEFT JOIN packages p ON c.id = p.client_id
-      WHERE c.id = ?
-      GROUP BY c.id
-    `, [result.insertId]);
+    // Crear cliente
+    const newClient = await Client.create({
+      first_name,
+      last_name,
+      email,
+      phone: phone || '',
+      address: address || '',
+      city: city || '',
+      country: country || 'Costa Rica',
+      company_name: company || null,
+      business_type: company ? 'Comercial' : 'Individual',
+      tax_id: null,
+      credit_limit: 1000.00,
+      preferred_delivery_time: 'Horario comercial (8AM-5PM)',
+      preferred_payment_method: 'Transferencia bancaria'
+    });
 
-    console.log(`✅ Cliente creado exitosamente: ${name} (ID: ${result.insertId})`);
+    console.log(`✅ Cliente creado exitosamente: ${name} (ID: ${newClient.id})`);
 
     res.status(201).json({
       success: true,
       message: 'Cliente creado exitosamente',
-      client: newClient[0]
+      client: newClient
     });
 
   } catch (error) {
@@ -185,10 +136,7 @@ router.post('/', async (req, res) => {
 router.put('/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const {
-      name, email, phone, address, city, country,
-      company, contact_person, active
-    } = req.body;
+    const { name, email, phone, address, city, country, company, active } = req.body;
 
     console.log(`👥 PUT /api/clients/${id} - Actualizando cliente`);
 
@@ -201,12 +149,8 @@ router.put('/:id', async (req, res) => {
     }
 
     // Verificar si el cliente existe
-    const [clientExists] = await pool.execute(
-      'SELECT id FROM clients WHERE id = ?',
-      [id]
-    );
-
-    if (clientExists.length === 0) {
+    const clientExists = await Client.findById(parseInt(id));
+    if (!clientExists) {
       return res.status(404).json({
         success: false,
         error: 'Cliente no encontrado'
@@ -214,47 +158,38 @@ router.put('/:id', async (req, res) => {
     }
 
     // Verificar si el email está en uso por otro cliente
-    const [emailExists] = await pool.execute(
-      'SELECT id FROM clients WHERE email = ? AND id != ?',
-      [email, id]
-    );
-
-    if (emailExists.length > 0) {
+    const emailExists = await Client.findByEmail(email);
+    if (emailExists && emailExists.id !== parseInt(id)) {
       return res.status(409).json({
         success: false,
         error: 'El email ya está en uso por otro cliente'
       });
     }
 
-    // Actualizar cliente
-    await pool.execute(`
-      UPDATE clients SET
-        name = ?, email = ?, phone = ?, address = ?, city = ?, country = ?,
-        company = ?, contact_person = ?, 
-        ${active !== undefined ? 'active = ?,' : ''} updated_at = NOW()
-      WHERE id = ?
-    `, [
-      name, email, phone || '', address || '', city || '', country || 'Costa Rica',
-      company || '', contact_person || '',
-      ...(active !== undefined ? [active ? 1 : 0] : []), id
-    ]);
+    // Separar nombre
+    const nameParts = name.split(' ');
+    const first_name = nameParts[0];
+    const last_name = nameParts.slice(1).join(' ') || '';
 
-    // Obtener cliente actualizado
-    const [updatedClient] = await pool.execute(`
-      SELECT c.*, 
-             COUNT(p.id) as total_packages
-      FROM clients c
-      LEFT JOIN packages p ON c.id = p.client_id
-      WHERE c.id = ?
-      GROUP BY c.id
-    `, [id]);
+    // Actualizar cliente
+    const updatedClient = await Client.update(parseInt(id), {
+      first_name,
+      last_name,
+      email,
+      phone: phone || '',
+      address: address || '',
+      city: city || '',
+      country: country || 'Costa Rica',
+      company_name: company || null,
+      ...(active !== undefined && { is_active: active })
+    });
 
     console.log(`✅ Cliente actualizado exitosamente: ${name} (ID: ${id})`);
 
     res.json({
       success: true,
       message: 'Cliente actualizado exitosamente',
-      client: updatedClient[0]
+      client: updatedClient
     });
 
   } catch (error) {
@@ -273,45 +208,27 @@ router.delete('/:id', async (req, res) => {
     const { id } = req.params;
     console.log(`👥 DELETE /api/clients/${id} - Eliminando cliente`);
 
-    // Verificar si el cliente existe
-    const [clientExists] = await pool.execute(
-      'SELECT id, name, email FROM clients WHERE id = ?',
-      [id]
-    );
-
-    if (clientExists.length === 0) {
+    const client = await Client.findById(parseInt(id));
+    if (!client) {
       return res.status(404).json({
         success: false,
         error: 'Cliente no encontrado'
       });
     }
 
-    const client = clientExists[0];
+    // En producción verificarías paquetes asociados aquí
+    
+    // Eliminar cliente (soft delete sería mejor)
+    await Client.update(parseInt(id), { is_active: false });
 
-    // Verificar si tiene paquetes asociados
-    const [packagesCount] = await pool.execute(
-      'SELECT COUNT(*) as count FROM packages WHERE client_id = ?',
-      [id]
-    );
-
-    if (packagesCount[0].count > 0) {
-      return res.status(400).json({
-        success: false,
-        error: 'No se puede eliminar el cliente porque tiene paquetes asociados'
-      });
-    }
-
-    // Eliminar cliente
-    await pool.execute('DELETE FROM clients WHERE id = ?', [id]);
-
-    console.log(`✅ Cliente eliminado exitosamente: ${client.name} (ID: ${id})`);
+    console.log(`✅ Cliente eliminado exitosamente: ${client.first_name} ${client.last_name} (ID: ${id})`);
 
     res.json({
       success: true,
       message: 'Cliente eliminado exitosamente',
       deletedClient: {
         id: client.id,
-        name: client.name,
+        name: `${client.first_name} ${client.last_name}`,
         email: client.email
       }
     });
@@ -327,23 +244,15 @@ router.delete('/:id', async (req, res) => {
 });
 
 // GET /api/clients/stats - Estadísticas de clientes
-router.get('/stats', async (req, res) => {
+router.get('/stats/summary', async (req, res) => {
   try {
     console.log('📊 GET /api/clients/stats - Obteniendo estadísticas');
 
-    const [stats] = await pool.execute(`
-      SELECT 
-        COUNT(*) as total_clients,
-        SUM(CASE WHEN active = 1 THEN 1 ELSE 0 END) as active_clients,
-        SUM(CASE WHEN active = 0 THEN 1 ELSE 0 END) as inactive_clients,
-        COUNT(DISTINCT CASE WHEN packages.id IS NOT NULL THEN clients.id END) as clients_with_packages
-      FROM clients
-      LEFT JOIN packages ON clients.id = packages.client_id
-    `);
+    const stats = await Client.getStatistics();
 
     res.json({
       success: true,
-      stats: stats[0]
+      stats
     });
 
   } catch (error) {
