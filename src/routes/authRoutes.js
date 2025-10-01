@@ -34,7 +34,7 @@ const login = async (req, res) => {
         }
 
         // Verificar contraseña
-        const isValidPassword = await User.verifyPassword(password, user.password_hash);
+        const isValidPassword = await User.verifyPassword(password, user.password);
         if (!isValidPassword) {
             return res.status(401).json({
                 success: false,
