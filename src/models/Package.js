@@ -117,7 +117,7 @@ let packageIdCounter = packages.length + 1;
 let trackingCounter = 6;
 
 class Package {
-    static async getAll(filters = {}) {
+    static async findAll(filters = {}) {
         try {
             let filteredPackages = [...packages];
             

@@ -281,7 +281,7 @@ let courierIdCounter = couriers.length + 1;
 
 class Courier {
     // Obtener todos los couriers
-    static async getAll(filters = {}) {
+    static async findAll(filters = {}) {
         try {
             let filteredCouriers = couriers.filter(c => c.is_active);
             
