@@ -18,7 +18,8 @@ app.use(compression());
 app.use(cors({
     origin: [
         'http://localhost:3000',
-        'https://itobox-courier.vercel.app',
+        'https://sistema-courier-frontend.vercel.app',
+        'https://sistemacourier.gruposic.net',
         process.env.FRONTEND_URL
     ].filter(Boolean),
     credentials: true,
